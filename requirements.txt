@@ -1,0 +1,8 @@
+playwright
+pymupdf
+ollama
+python-telegram-bot
+apscheduler
+python-dotenv
+pytest
+pytest-asyncio
