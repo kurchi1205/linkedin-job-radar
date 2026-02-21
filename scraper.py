@@ -91,22 +91,12 @@ class LinkedInJobScraper:
             print(f"Error parsing job card: {e}")
             return None
 
-    def search_jobs(self, keywords: List[str], location: str, limit: int = 25) -> List[Dict]:
-        """
-        Search for jobs on LinkedIn's public jobs page.
-
-        Args:
-            keywords: List of keyword strings
-            location: Location string
-            limit: Max number of jobs to return
-
-        Returns:
-            List of new job dicts (not already in DB)
-        """
+    def _search_single_keyword(self, keyword: str, location: str, timeframe: str, limit: int) -> List[Dict]:
+        """Search LinkedIn for a single keyword and return new jobs."""
         params = {
-            "keywords": " ".join(keywords),
+            "keywords": keyword,
             "location": location,
-            "f_TPR": "r604800",  # Past week
+            "f_TPR": timeframe,
             "start": 0,
         }
 
@@ -137,16 +127,47 @@ class LinkedInJobScraper:
                 time.sleep(2)
 
             except requests.exceptions.RequestException as e:
-                print(f"Request error: {e}")
+                print(f"Request error for '{keyword}': {e}")
                 break
 
-        return jobs[:limit]
+        return jobs
+
+    def search_jobs(self, keywords: List[str], location: str, timeframe: str = "r604800", limit: int = 25) -> List[Dict]:
+        """
+        Search for jobs on LinkedIn's public jobs page.
+        Searches each keyword separately to get better results.
+
+        Args:
+            keywords: List of keyword strings (each searched independently)
+            location: Location string
+            timeframe: LinkedIn f_TPR value (r86400=24h, r172800=48h, r604800=week)
+            limit: Max total jobs to return
+
+        Returns:
+            List of new job dicts (not already in DB)
+        """
+        all_jobs = []
+        seen_ids = set()
+        per_keyword_limit = max(limit // len(keywords), 10) if keywords else limit
+
+        for keyword in keywords:
+            print(f"Searching: '{keyword}' in {location}...")
+            jobs = self._search_single_keyword(keyword, location, timeframe, per_keyword_limit)
+
+            for job in jobs:
+                if job["job_id"] not in seen_ids:
+                    seen_ids.add(job["job_id"])
+                    all_jobs.append(job)
+
+            time.sleep(2)
+
+        return all_jobs[:limit]
 
 
-def scrape_new_jobs(keywords: List[str], location: str, limit: int = 25) -> List[Dict]:
-    """Top-level function called by main.py — matches the old interface."""
+def scrape_new_jobs(keywords: List[str], location: str, timeframe: str = "r604800", limit: int = 25) -> List[Dict]:
+    """Top-level function called by main.py."""
     scraper = LinkedInJobScraper()
-    jobs = scraper.search_jobs(keywords, location, limit)
+    jobs = scraper.search_jobs(keywords, location, timeframe, limit)
     print(f"Found {len(jobs)} new jobs")
     return jobs
 

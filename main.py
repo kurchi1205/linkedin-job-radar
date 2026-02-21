@@ -23,6 +23,7 @@ async def run_job_scan(application):
     # Read live settings from DB each scan
     keywords_str = db.get_setting("keywords")
     location = db.get_setting("location")
+    timeframe = db.get_setting("timeframe") or "r604800"
 
     if not keywords_str:
         logger.warning("No keywords set. Skipping scan. Use /keywords in Telegram.")
@@ -32,10 +33,10 @@ async def run_job_scan(application):
         return
 
     keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
-    logger.info(f"Starting job scan — keywords: {keywords}, location: {location}")
+    logger.info(f"Starting job scan — keywords: {keywords}, location: {location}, timeframe: {timeframe}")
 
     try:
-        new_jobs = scraper.scrape_new_jobs(keywords, location)
+        new_jobs = scraper.scrape_new_jobs(keywords, location, timeframe)
     except Exception as e:
         logger.error(f"Scraping failed: {e}")
         return
@@ -86,6 +87,13 @@ async def main():
         logger.info(f"Initial location: {config.JOB_LOCATION}")
     else:
         logger.info(f"Using existing location: {db.get_setting('location')}")
+
+    # Seed timeframe if not already set
+    if not db.get_setting("timeframe"):
+        db.set_setting("timeframe", config.JOB_TIMEFRAME)
+        logger.info(f"Initial timeframe: {config.JOB_TIMEFRAME}")
+    else:
+        logger.info(f"Using existing timeframe: {db.get_setting('timeframe')}")
 
     # 3. Create Telegram bot application
     application = telegram_bot.create_application()

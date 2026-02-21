@@ -64,8 +64,12 @@ def save_profile(raw_text, parsed_profile, keywords):
 
 
 def job_exists(job_id):
+    """Returns True only if job is viewed or ignored. Pending jobs are NOT skipped."""
     conn = _get_conn()
-    row = conn.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE job_id = ? AND status IN ('viewed', 'ignored')",
+        (job_id,),
+    ).fetchone()
     conn.close()
     return row is not None
 
