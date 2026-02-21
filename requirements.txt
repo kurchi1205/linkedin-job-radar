@@ -1,5 +1,5 @@
 playwright
-pymupdf
+requests
 ollama
 python-telegram-bot
 apscheduler

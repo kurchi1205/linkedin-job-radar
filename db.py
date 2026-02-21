@@ -105,3 +105,6 @@ def set_setting(key, value):
     )
     conn.commit()
     conn.close()
+
+if __name__=="__main__":
+    init_db()

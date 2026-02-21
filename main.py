@@ -70,12 +70,6 @@ async def main():
     logger.info("Loading candidate profile...")
     try:
         profile, keywords = resume_parser.get_or_create_profile()
-    except FileNotFoundError:
-        logger.error(
-            f"Resume not found at '{config.RESUME_PATH}'. "
-            f"Place your PDF resume there and restart."
-        )
-        sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to parse resume: {e}")
         sys.exit(1)
