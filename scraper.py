@@ -1,173 +1,159 @@
-import asyncio
-import random
 import re
-import urllib.parse
+import time
+from typing import List, Dict, Optional
 
-from playwright.async_api import async_playwright
+import requests
+from bs4 import BeautifulSoup
 
-import config
 import db
 
 
-async def create_browser_context(playwright):
-    browser = await playwright.chromium.launch(headless=True)
-    context = await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-    )
-    # Inject LinkedIn session cookie
-    await context.add_cookies([
-        {
-            "name": "li_at",
-            "value": config.LINKEDIN_COOKIE,
-            "domain": ".linkedin.com",
-            "path": "/",
-        }
-    ])
-    return browser, context
+class LinkedInJobScraper:
+    """Scrapes public LinkedIn job listings. No authentication required."""
 
+    def __init__(self):
+        self.base_url = "https://www.linkedin.com/jobs/search"
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+        })
 
-async def _random_delay(min_s=2, max_s=5):
-    await asyncio.sleep(random.uniform(min_s, max_s))
+    def _extract_job_id(self, url: str) -> str:
+        # Try /jobs/view/12345 (pure numeric)
+        match = re.search(r"/jobs/view/(\d+)", url)
+        if match:
+            return match.group(1)
+        # Try /jobs/view/some-slug-12345/ (slug ending with numeric ID)
+        match = re.search(r"/jobs/view/.*?-(\d+)", url)
+        if match:
+            return match.group(1)
+        # Try currentJobId=12345 query param
+        match = re.search(r"currentJobId=(\d+)", url)
+        if match:
+            return match.group(1)
+        # Last resort — grab any trailing numeric segment from the path
+        match = re.search(r"/(\d+)/?(?:\?|$)", url)
+        if match:
+            return match.group(1)
+        return ""
 
-
-def _extract_job_id(url):
-    """Extract job ID from a LinkedIn job URL."""
-    match = re.search(r"/view/(\d+)", url)
-    if match:
-        return match.group(1)
-    match = re.search(r"currentJobId=(\d+)", url)
-    if match:
-        return match.group(1)
-    return None
-
-
-async def search_jobs(page, keywords, location):
-    """Search LinkedIn jobs and return list of job card data."""
-    query = urllib.parse.quote(" ".join(keywords))
-    loc = urllib.parse.quote(location)
-    url = (
-        f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}&location={loc}&f_TPR=r604800"
-    )
-
-    await page.goto(url, wait_until="domcontentloaded")
-    await _random_delay(3, 6)
-
-    jobs = []
-
-    # Scroll to load more job cards
-    for _ in range(3):
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await _random_delay(1, 2)
-
-    # Extract job cards from the search results
-    job_cards = await page.query_selector_all(
-        "div.job-card-container, li.jobs-search-results__list-item"
-    )
-
-    for card in job_cards:
+    def _parse_job_card(self, card) -> Optional[Dict]:
         try:
-            # Try to get the job link
-            link_el = await card.query_selector("a.job-card-container__link, a.job-card-list__title")
-            if not link_el:
-                continue
+            link_elem = (
+                card.find("a", class_="base-card__full-link")
+                or card.find("a", href=re.compile(r"/jobs/view/"))
+            )
+            if not link_elem:
+                return None
 
-            href = await link_el.get_attribute("href")
-            if not href:
-                continue
-
-            job_id = _extract_job_id(href)
+            job_link = link_elem.get("href", "")
+            job_id = self._extract_job_id(job_link)
             if not job_id:
-                continue
-
+                return None
+            
             # Skip if already in DB
             if db.job_exists(job_id):
-                continue
+                return None
 
-            title_text = (await link_el.inner_text()).strip()
-
-            # Company name
-            company_el = await card.query_selector(
-                "span.job-card-container__primary-description, "
-                "span.job-card-container__company-name"
+            title_elem = (
+                card.find("h3", class_="base-search-card__title")
+                or card.find("span", class_="sr-only")
             )
-            company = (await company_el.inner_text()).strip() if company_el else "Unknown"
+            title = title_elem.get_text(strip=True) if title_elem else "Unknown"
 
-            # Location
-            loc_el = await card.query_selector(
-                "li.job-card-container__metadata-item, "
-                "span.job-card-container__metadata-wrapper"
+            company_elem = (
+                card.find("h4", class_="base-search-card__subtitle")
+                or card.find("a", class_="hidden-nested-link")
             )
-            job_location = (await loc_el.inner_text()).strip() if loc_el else "Unknown"
+            company = company_elem.get_text(strip=True) if company_elem else "Unknown"
 
-            job_url = f"https://www.linkedin.com/jobs/view/{job_id}/"
+            location_elem = card.find("span", class_="job-search-card__location")
+            location = location_elem.get_text(strip=True) if location_elem else "Unknown"
 
-            jobs.append({
+            url = f"https://www.linkedin.com{job_link}" if job_link.startswith("/") else job_link
+
+            return {
                 "job_id": job_id,
-                "title": title_text,
+                "title": title,
                 "company": company,
-                "location": job_location,
-                "url": job_url,
-            })
+                "location": location,
+                "url": url,
+            }
+        except Exception as e:
+            print(f"Error parsing job card: {e}")
+            return None
 
-        except Exception:
-            continue
+    def search_jobs(self, keywords: List[str], location: str, limit: int = 25) -> List[Dict]:
+        """
+        Search for jobs on LinkedIn's public jobs page.
 
+        Args:
+            keywords: List of keyword strings
+            location: Location string
+            limit: Max number of jobs to return
+
+        Returns:
+            List of new job dicts (not already in DB)
+        """
+        params = {
+            "keywords": " ".join(keywords),
+            "location": location,
+            "f_TPR": "r604800",  # Past week
+            "start": 0,
+        }
+
+        jobs = []
+        page = 0
+
+        while len(jobs) < limit:
+            params["start"] = page * 25
+
+            try:
+                response = self.session.get(self.base_url, params=params, timeout=15)
+                response.raise_for_status()
+
+                soup = BeautifulSoup(response.text, "html.parser")
+                job_cards = soup.find_all("div", class_="base-card") or \
+                            soup.find_all("div", class_="job-search-card")
+
+                if not job_cards:
+                    break
+                for card in job_cards:
+                    if len(jobs) >= limit:
+                        break
+                    job = self._parse_job_card(card)
+                    if job:
+                        jobs.append(job)
+
+                page += 1
+                time.sleep(2)
+
+            except requests.exceptions.RequestException as e:
+                print(f"Request error: {e}")
+                break
+
+        return jobs[:limit]
+
+
+def scrape_new_jobs(keywords: List[str], location: str, limit: int = 25) -> List[Dict]:
+    """Top-level function called by main.py — matches the old interface."""
+    scraper = LinkedInJobScraper()
+    jobs = scraper.search_jobs(keywords, location, limit)
+    print(f"Found {len(jobs)} new jobs")
     return jobs
 
 
-async def fetch_job_description(page, job_url):
-    """Navigate to a job page and extract the full description."""
-    await page.goto(job_url, wait_until="domcontentloaded")
-    await _random_delay(2, 4)
-
-    # Try to click "See more" to expand description
-    try:
-        see_more = await page.query_selector(
-            "button.jobs-description__footer-button, "
-            "button[aria-label='Show more']"
-        )
-        if see_more:
-            await see_more.click()
-            await _random_delay(0.5, 1)
-    except Exception:
-        pass
-
-    # Extract description text
-    desc_el = await page.query_selector(
-        "div.jobs-description__content, "
-        "div.jobs-box__html-content, "
-        "div#job-details"
-    )
-    if desc_el:
-        return (await desc_el.inner_text()).strip()
-    return ""
-
-
-async def scrape_new_jobs(keywords, location):
-    """Full scraping pipeline: search -> filter new -> fetch descriptions."""
-    async with async_playwright() as p:
-        browser, context = await create_browser_context(p)
-        page = await context.new_page()
-
-        try:
-            # Search for jobs
-            job_cards = await search_jobs(page, keywords, location)
-            print(f"Found {len(job_cards)} new job cards")
-
-            # Fetch full descriptions for new jobs
-            for job in job_cards:
-                await _random_delay(2, 4)
-                description = await fetch_job_description(page, job["url"])
-                job["description"] = description
-                print(f"  Fetched JD: {job['title']} at {job['company']}")
-
-        finally:
-            await browser.close()
-
-    return job_cards
+if __name__ == "__main__":
+    db.init_db()
+    jobs = scrape_new_jobs(["AI Engineer"], "Singapore", limit=5)
+    for job in jobs:
+        print(f"  {job['title']} — {job['company']} ({job['location']})")
+        print(f"    {job['url']}")

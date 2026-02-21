@@ -38,7 +38,6 @@ def init_db():
             company TEXT NOT NULL,
             location TEXT NOT NULL,
             url TEXT NOT NULL,
-            description TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -71,13 +70,13 @@ def job_exists(job_id):
     return row is not None
 
 
-def insert_job(job_id, title, company, location, url, description, status="pending"):
+def insert_job(job_id, title, company, location, url, status="pending"):
     conn = _get_conn()
     conn.execute(
         """INSERT OR IGNORE INTO jobs
-           (job_id, title, company, location, url, description, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (job_id, title, company, location, url, description, status),
+           (job_id, title, company, location, url, status)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (job_id, title, company, location, url, status),
     )
     conn.commit()
     conn.close()

@@ -35,7 +35,7 @@ async def run_job_scan(application):
     logger.info(f"Starting job scan — keywords: {keywords}, location: {location}")
 
     try:
-        new_jobs = await scraper.scrape_new_jobs(keywords, location)
+        new_jobs = scraper.scrape_new_jobs(keywords, location)
     except Exception as e:
         logger.error(f"Scraping failed: {e}")
         return
@@ -48,7 +48,6 @@ async def run_job_scan(application):
             company=job["company"],
             location=job["location"],
             url=job["url"],
-            description=job.get("description", ""),
             status="pending",
         )
 
